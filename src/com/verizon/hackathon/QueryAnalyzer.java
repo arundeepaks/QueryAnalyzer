@@ -26,7 +26,7 @@ public class QueryAnalyzer {
 					+ " GROUP BY 1,2,3"
 				+ " UNION ALL "
 				+ " SELECT SC1A, SC4A AS SC2A, SC3A FROM "
-					+ "(SELECT COALESCE(ST1A.SC1,ST1A.SC2,'X') AS SC1A, CASE WHEN ST2A.SC3 = 'I' ST2AC.SC3 ELSE 'Z' END AS SC4A, "
+					+ "(SELECT COALESCE(ST1A.SC1,ST1A.SC2,'X') AS SC1A, CASE WHEN ST2A.SC3 = 'I' THEN ST2AC.SC3 ELSE 'Z' END AS SC4A, "
 						+ " COALESCE(CASE WHEN ST1A.SC4 = ST2A.SC5 AND ST2A.SC6 = 123 THEN SUBSTR(ST2A.SC6,1,2) ELSE NULL END,ST1A.SC7,'Y') AS SC3A"
 						+ " FROM SS1.ST1 ST1A JOIN SS1.ST2 ST2A ON ST1A.WC1 = ST2A.WC2 AND ST1A.WC3 = 10 "
 						+ " WHERE ST2A.WC4 ='V1' AND WC5 <> TEXT_1 "
@@ -154,17 +154,22 @@ public class QueryAnalyzer {
 		String whereClause = null;
 		String groupByClause = null;
 		
-		// If this select query has a subquery then call processSelectSubQuery for that subquery recursively
+		// If this select subquery has another subquery then call processSelectSubQuery for that subquery recursively
 		if (selectQueryTxt.indexOf("SELECT", 7) >= 0){
 			// Start point is the left brace before select
 			int startPtOfSubQuery = selectQueryTxt.indexOf("SELECT",7);
 			int startPtOfSubQueryBrace = selectQueryTxt.substring(0, selectQueryTxt.indexOf("SELECT",7)).lastIndexOf('(');
 			// End point is the closing brace after select
 			int endPtOfSubQuery = QueryUtil.getClosingBraceIndex(selectQueryTxt, ')', startPtOfSubQueryBrace+1);
-			metaDataList = processSelectSubQuery(targetColumnsArr,selectQueryTxt.substring(startPtOfSubQuery, endPtOfSubQuery), metaDataList);
+			String subquery = selectQueryTxt.substring(startPtOfSubQuery, endPtOfSubQuery);
+			System.out.println("subquery: ." + subquery + ".");
 			
-			selectQueryTxt = selectQueryTxt.substring(0, startPtOfSubQueryBrace) 
-								+ selectQueryTxt.substring(endPtOfSubQuery + 1);
+			// Processing Subquery
+			metaDataList = processSelectSubQuery(targetColumnsArr,subquery, metaDataList);
+			
+			selectQueryTxt = selectQueryTxt.substring(0, startPtOfSubQueryBrace) + selectQueryTxt.substring(endPtOfSubQuery + 1);
+			
+			System.out.println("Remaining super query: ." + selectQueryTxt + ".");
 		}
 		
 		// Retrieve from where and group by clause
@@ -184,59 +189,64 @@ public class QueryAnalyzer {
 		System.out.println("groupByClause: ." + groupByClause + ".");
 		
 		HashMap<String, SourceTable> sourceTableMap = processTableName(fromClause);
-		SourceTable sourceTableObj = null;
-		String sourceSchema = null;
-		String sourceTable = null;
 		String transformation = null;
 		
 		String sourceColumns = selectQueryTxt.substring(selectQueryTxt.indexOf("SELECT") + 6, selectQueryTxt.indexOf("FROM")).trim();
 		System.out.println("sourceColumns: ." + sourceColumns + ".");
+		
+		String coalesceSection1 = null;
+		String coalesceSection2 = null;
+		if (sourceColumns.contains("COALESCE")){
+			System.out.println("selectQueryTxt.indexOf(COALESCE): ." + selectQueryTxt.indexOf("COALESCE") + ".");
+			coalesceSection1 = sourceColumns.substring(selectQueryTxt.indexOf("COALESCE"), selectQueryTxt.indexOf(")")+1).trim();
+			sourceColumns = sourceColumns.replace(coalesceSection1, "CS1");
+			System.out.println("coalesceSection1: ." + coalesceSection1 + ".");
+		}
+		if (sourceColumns.contains("COALESCE")){
+			coalesceSection2 = sourceColumns.substring(selectQueryTxt.indexOf("COALESCE"), selectQueryTxt.indexOf(")")+1).trim();
+			sourceColumns = sourceColumns.replace(coalesceSection1, "CS2");
+			System.out.println("coalesceSection2: ." + coalesceSection2 + ".");
+		}
+		System.out.println("sourceColumns after removing CS: ." + sourceColumns + ".");
+		
 		String[] sourceColumnsArr = sourceColumns.split(",");
 			
 		for (int j=0; j < sourceColumnsArr.length; j++){
 			if (sourceColumnsArr[j] != null && !"".equals(sourceColumnsArr[j].trim()) ){
 				
 				String sourceColumn = sourceColumnsArr[j].trim();
+				
 				if (sourceColumn.contains(" AS ")){
 					System.out.println("sourceColumn contains Alias using AS. Removing it");
 					sourceColumn = sourceColumn.substring(0, sourceColumn.indexOf("AS")).trim();
 				} else if (sourceColumn.contains(" ")){
+					
+					// TO DO: Take care of aliases which doesnt use AS
 					System.out.println("sourceColumn contains Alias without AS. Removing it");
-					sourceColumn = sourceColumn.substring(0, sourceColumn.indexOf(" ")).trim();
+					//sourceColumn = sourceColumn.substring(0, sourceColumn.indexOf(" ")).trim();
 				}
 				System.out.println("sourceColumn with table synonym: ." + sourceColumn + ".");
 				
-				if (sourceColumn.contains(".")){
-					// If Column contains table ref, then use it to identify Source table details
-					sourceTableObj 	= sourceTableMap.get(sourceColumn.substring(0, sourceColumn.indexOf(".")).trim() );
-					sourceSchema 	= sourceTableObj.getSourceSchema();
-					sourceTable 	= sourceTableObj.getSourceTable();
-					sourceColumn 	= sourceColumn.substring(sourceColumn.indexOf(".")+1).trim();
-					transformation  = sourceTableObj.getTransformation();
-
-				} else if (sourceTableMap.size() == 1){
-					// If Column contains just one table in query, then use it as Source table for all source columns
-					Iterator iter 	= sourceTableMap.values().iterator();
-					sourceSchema 	= ((SourceTable)iter.next()).getSourceSchema();
-					sourceTable 	= ((SourceTable)iter.next()).getSourceTable();
-					transformation  = ((SourceTable)iter.next()).getTransformation();
-					
-				} else {
-					sourceSchema = "";		//"--No Mapping Available--";
-					sourceTable = "";			//"--No Mapping Available--";
+				QueryMetaData qmd = null;
+				
+				if (sourceColumn.contains("CS1")){
+					System.out.println("Replacing CS1");
+					sourceColumn = sourceColumn.replace("CS1", coalesceSection1);
 				}
-				System.out.println("sourceSchema: ." + sourceSchema + ".");
-				System.out.println("sourceTable: ." + sourceTable + ".");
-				System.out.println("sourceColumn: ." + sourceColumn + ".");
-				System.out.println("transformation: ." + transformation + ".");
-					
-				QueryMetaData qmd = new QueryMetaData();
-				qmd.setTargetColumn(targetColumnsArr[j].trim());
-				qmd.setSourceSchema(sourceSchema);
-				qmd.setSourceTable(sourceTable);
-				qmd.setSourceColumn(sourceColumn);
-				qmd.setTransformation(transformation);
-				metaDataList.add(qmd);		
+				
+				if (sourceColumn.contains("CS2")){
+					System.out.println("Replacing CS2");
+					sourceColumn = sourceColumn.replace("CS2", coalesceSection2);
+				}
+				
+				if (sourceColumn.startsWith("COALESCE")){
+					metaDataList = processCoalesceColumn(sourceColumn, targetColumnsArr[j].trim(), sourceTableMap, metaDataList);
+				} else if (sourceColumn.startsWith("CASE")){
+					metaDataList = processCaseColumn(sourceColumn, targetColumnsArr[j].trim(), sourceTableMap, metaDataList);
+				} else {
+					qmd = createMetaDataRecord(sourceColumn, targetColumnsArr[j].trim(), sourceTableMap, transformation);
+					metaDataList.add(qmd);
+				}
 			}
 		}
 		
@@ -257,7 +267,105 @@ public class QueryAnalyzer {
 		return metaDataList;
 	}
 	
-public static HashMap<String, SourceTable> processTableName(String fromClause){
+	public static ArrayList<QueryMetaData> processCoalesceColumn(String sourceColumn, String targetColumn, HashMap<String, SourceTable> sourceTableMap, ArrayList<QueryMetaData> metaDataList){
+		System.out.println("In processCoalesceColumn, sourceColumn:"+sourceColumn);
+		String concatStr = null;
+		String[] concatList = null;
+		String transformation = "COALESCE";
+		concatStr = sourceColumn.substring(sourceColumn.indexOf('(')+1, sourceColumn.indexOf(')')).trim();
+		System.out.println("concatStr: ." + concatStr + ".");
+		concatList = concatStr.split(",");
+		System.out.println("concatList length: ." + concatList.length + ".");
+		
+		for (int j=0; j < concatList.length; j++){
+			String concatCol = concatList[j].trim();
+			if (concatCol.startsWith("CASE")){
+				metaDataList = processCaseColumn(concatCol,targetColumn,sourceTableMap,metaDataList);
+			}else{
+				QueryMetaData qmd = createMetaDataRecord(concatList[j], targetColumn, sourceTableMap, transformation);
+				metaDataList.add(qmd);	
+			}
+		}
+		return metaDataList;
+	}
+	
+	public static ArrayList<QueryMetaData> processCaseColumn(String sourceColumn, String targetColumn, HashMap<String, SourceTable> sourceTableMap, ArrayList<QueryMetaData> metaDataList){
+		System.out.println("In processCaseColumn");
+		
+		String condition = sourceColumn.substring(sourceColumn.indexOf("WHEN"+ 4), sourceColumn.indexOf("THEN")).trim();
+		String col1 = sourceColumn.substring(sourceColumn.indexOf("THEN" + 4), sourceColumn.indexOf("ELSE")).trim();
+		String col2 = sourceColumn.substring(sourceColumn.indexOf("ELSE" + 4)).trim();
+		String transformation = "CASE " + condition;
+		
+		System.out.println("condition: ." + condition + ".");
+		System.out.println("col1: ." + col1 + ".");
+		System.out.println("col2: ." + col2 + ".");
+
+		if (col1.startsWith("COALESCE")){
+			metaDataList = processCaseColumn(col1,targetColumn,sourceTableMap,metaDataList);
+		}else{
+			QueryMetaData qmd = createMetaDataRecord(col1, targetColumn, sourceTableMap, transformation);
+			metaDataList.add(qmd);
+		}
+			
+		if (col2.startsWith("COALESCE")){
+			metaDataList = processCaseColumn(col2,targetColumn,sourceTableMap,metaDataList);
+		}else{
+			QueryMetaData qmd = createMetaDataRecord(col2, targetColumn, sourceTableMap, transformation);
+			metaDataList.add(qmd);
+		}
+		
+		return metaDataList;
+	}
+	
+	public static QueryMetaData createMetaDataRecord(String sourceColumn, String targetColumn, HashMap<String, SourceTable> sourceTableMap, String colTransformation){
+		System.out.println("In createMetaDataRecord");
+		
+		SourceTable sourceTableObj = null;
+		String sourceSchema = null;
+		String sourceTable = null;
+		String transformation = null;
+		
+		if (sourceColumn.contains(".")){
+			// If Column contains table ref, then use it to identify Source table details
+			sourceTableObj 	= sourceTableMap.get(sourceColumn.substring(0, sourceColumn.indexOf(".")).trim() );
+			sourceSchema 	= sourceTableObj.getSourceSchema();
+			sourceTable 	= sourceTableObj.getSourceTable();
+			sourceColumn 	= sourceColumn.substring(sourceColumn.indexOf(".")+1).trim();
+			transformation  = sourceTableObj.getTransformation();
+
+		} else if (sourceTableMap.size() == 1){
+			// If Column contains just one table in query, then use it as Source table for all source columns
+			Iterator<SourceTable> iter 	= sourceTableMap.values().iterator();
+			sourceSchema 	= ((SourceTable)iter.next()).getSourceSchema();
+			sourceTable 	= ((SourceTable)iter.next()).getSourceTable();
+			transformation  = ((SourceTable)iter.next()).getTransformation();
+			
+		} else {
+			sourceSchema = "";		//"--No Mapping Available--";
+			sourceTable = "";			//"--No Mapping Available--";
+		}
+		
+		if (colTransformation != null){
+			transformation = colTransformation;
+		}
+			
+		System.out.println("sourceSchema: ." + sourceSchema + ".");
+		System.out.println("sourceTable: ." + sourceTable + ".");
+		System.out.println("sourceColumn: ." + sourceColumn + ".");
+		System.out.println("transformation: ." + transformation + ".");
+			
+		QueryMetaData qmd = new QueryMetaData();
+		qmd.setTargetColumn(targetColumn);
+		qmd.setSourceSchema(sourceSchema);
+		qmd.setSourceTable(sourceTable);
+		qmd.setSourceColumn(sourceColumn);
+		qmd.setTransformation(transformation);
+		
+		return qmd;
+	}
+	
+	public static HashMap<String, SourceTable> processTableName(String fromClause){
 		
 		System.out.println("In processTableName");
 		HashMap<String, SourceTable> sourceTableMap = new HashMap<String, SourceTable>();	// Contains mapping of table alias to table properties object
