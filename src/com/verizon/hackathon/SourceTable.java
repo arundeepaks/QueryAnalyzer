@@ -23,5 +23,7 @@ public class SourceTable {
 	public void setTransformation(String transformation) {
 		this.transformation = transformation;
 	}
-	
+	public String toString(){
+		return("sourceSchema: " + sourceSchema + "; sourceTable: " + sourceTable + "; transformation: " + transformation);
+	}
 }
